@@ -36,6 +36,27 @@
     uint
 )
 
+(define-map auction-history
+    uint
+    {
+        creator: principal,
+        winner: (optional principal),
+        final-price: uint,
+        total-extensions: uint,
+        completion-block: uint
+    }
+)
+
+(define-map user-stats
+    principal
+    {
+        auctions-created: uint,
+        auctions-won: uint,
+        total-spent: uint,
+        total-earned: uint
+    }
+)
+
 (define-read-only (get-nft-owner (token-id uint))
     (nft-get-owner? art-nft token-id)
 )
@@ -83,6 +104,25 @@
     )
 )
 
+(define-read-only (get-auction-history (auction-id uint))
+    (map-get? auction-history auction-id)
+)
+
+(define-read-only (get-user-stats (user principal))
+    (default-to 
+        { auctions-created: u0, auctions-won: u0, total-spent: u0, total-earned: u0 }
+        (map-get? user-stats user)
+    )
+)
+
+(define-read-only (get-top-creators (limit uint))
+    (ok limit)
+)
+
+(define-read-only (get-top-bidders (limit uint))
+    (ok limit)
+)
+
 (define-public (mint-nft)
     (let ((token-id (+ (var-get nft-counter) u1)))
         (try! (nft-mint? art-nft token-id tx-sender))
@@ -107,6 +147,7 @@
             status: "active",
             extensions: u0
         })
+        (update-user-stats-on-auction-start tx-sender)
         (ok true)
     )
 )
@@ -206,6 +247,7 @@
         )
         
         (map-set auctions auction-id (merge auction { status: "ended" }))
+        (record-auction-completion auction-id auction highest-bidder highest-bid)
         (ok true)
     )
 )
@@ -264,5 +306,41 @@
             true
         )
         (ok true)
+    )
+)
+
+(define-private (update-user-stats-on-auction-start (creator principal))
+    (let ((current-stats (get-user-stats creator)))
+        (map-set user-stats creator (merge current-stats {
+            auctions-created: (+ (get auctions-created current-stats) u1)
+        }))
+    )
+)
+
+(define-private (record-auction-completion (auction-id uint) (auction { creator: principal, reserve-price: uint, end-block: uint, highest-bid: uint, highest-bidder: (optional principal), status: (string-ascii 20), extensions: uint }) (winner (optional principal)) (final-price uint))
+    (begin
+        (map-set auction-history auction-id {
+            creator: (get creator auction),
+            winner: winner,
+            final-price: final-price,
+            total-extensions: (get extensions auction),
+            completion-block: stacks-block-height
+        })
+        
+        (let ((creator-stats (get-user-stats (get creator auction))))
+            (map-set user-stats (get creator auction) (merge creator-stats {
+                total-earned: (+ (get total-earned creator-stats) final-price)
+            }))
+        )
+        
+        (match winner
+            bidder (let ((bidder-stats (get-user-stats bidder)))
+                (map-set user-stats bidder (merge bidder-stats {
+                    auctions-won: (+ (get auctions-won bidder-stats) u1),
+                    total-spent: (+ (get total-spent bidder-stats) final-price)
+                }))
+            )
+            true
+        )
     )
 )
