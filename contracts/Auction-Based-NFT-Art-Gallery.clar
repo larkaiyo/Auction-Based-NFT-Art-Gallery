@@ -5,6 +5,8 @@
 (define-constant max-auction-duration u10000)
 (define-constant royalty-percentage u5)
 (define-constant anti-snipe-blocks u12)
+(define-constant buy-now-multiplier u150)
+(define-constant min-buy-now-multiplier u120)
 
 (define-data-var nft-counter uint u0)
 
@@ -19,6 +21,11 @@
         status: (string-ascii 20),
         extensions: uint
     }
+)
+
+(define-map buy-now-prices
+    uint
+    uint
 )
 
 (define-map bids
@@ -123,6 +130,36 @@
     (ok limit)
 )
 
+(define-read-only (get-buy-now-price (auction-id uint))
+    (map-get? buy-now-prices auction-id)
+)
+
+(define-read-only (calculate-dynamic-buy-now-price (auction-id uint))
+    (match (map-get? auctions auction-id)
+        auction (let (
+            (current-highest-bid (get highest-bid auction))
+            (base-price (get reserve-price auction))
+        )
+            (if (> current-highest-bid u0)
+                (/ (* current-highest-bid buy-now-multiplier) u100)
+                (/ (* base-price buy-now-multiplier) u100)
+            )
+        )
+        u0
+    )
+)
+
+(define-read-only (is-buy-now-available (auction-id uint))
+    (match (map-get? auctions auction-id)
+        auction (and 
+            (is-eq (get status auction) "active")
+            (< stacks-block-height (get end-block auction))
+            (is-some (map-get? buy-now-prices auction-id))
+        )
+        false
+    )
+)
+
 (define-public (mint-nft)
     (let ((token-id (+ (var-get nft-counter) u1)))
         (try! (nft-mint? art-nft token-id tx-sender))
@@ -148,6 +185,48 @@
             extensions: u0
         })
         (update-user-stats-on-auction-start tx-sender)
+        (ok true)
+    )
+)
+
+(define-public (set-buy-now-price (auction-id uint) (buy-now-price uint))
+    (let ((auction (unwrap! (map-get? auctions auction-id) (err u50))))
+        (asserts! (is-eq tx-sender (get creator auction)) (err u51))
+        (asserts! (is-eq (get status auction) "active") (err u52))
+        (asserts! (>= buy-now-price (/ (* (get reserve-price auction) min-buy-now-multiplier) u100)) (err u53))
+        (map-set buy-now-prices auction-id buy-now-price)
+        (ok true)
+    )
+)
+
+(define-public (instant-purchase (auction-id uint))
+    (let (
+        (auction (unwrap! (map-get? auctions auction-id) (err u54)))
+        (buy-now-price (unwrap! (map-get? buy-now-prices auction-id) (err u55)))
+        (creator (get creator auction))
+        (highest-bidder (get highest-bidder auction))
+        (highest-bid (get highest-bid auction))
+        (royalty (/ (* buy-now-price royalty-percentage) u100))
+        (creator-payment (- buy-now-price royalty))
+    )
+        (asserts! (is-eq (get status auction) "active") (err u56))
+        (asserts! (< stacks-block-height (get end-block auction)) (err u57))
+        
+        (try! (stx-transfer? buy-now-price tx-sender (as-contract tx-sender)))
+        
+        (match highest-bidder
+            bidder (try! (as-contract (stx-transfer? highest-bid (as-contract tx-sender) bidder)))
+            true
+        )
+        
+        (try! (as-contract (nft-transfer? art-nft auction-id tx-sender tx-sender)))
+        (try! (as-contract (stx-transfer? creator-payment (as-contract tx-sender) creator)))
+        (try! (as-contract (stx-transfer? royalty (as-contract tx-sender) creator)))
+        
+        (map-set artist-royalties creator (+ (get-artist-royalties creator) royalty))
+        (map-set auctions auction-id (merge auction { status: "sold" }))
+        
+        (record-auction-completion auction-id auction (some tx-sender) buy-now-price)
         (ok true)
     )
 )
