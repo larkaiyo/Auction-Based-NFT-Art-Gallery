@@ -573,11 +573,11 @@
             total-featured-sales: u0
         })
         
-        ;; Update curator information  
+        ;; Update curator information
         (map-set gallery-curation { curator: tx-sender, position: position } {
             artist: artist,
             curated-at: stacks-block-height,
-            reason: (unwrap-panic (as-max-len? showcase-description u150))
+            reason: showcase-description
         })
         
         ;; Update artist reputation
@@ -625,7 +625,7 @@
         (map-set gallery-curation { curator: tx-sender, position: new-position } {
             artist: artist,
             curated-at: stacks-block-height,
-            reason: (unwrap-panic (as-max-len? (get showcase-description featured-info) u150))
+            reason: (get showcase-description featured-info)
         })
         
         (ok true)
@@ -646,7 +646,7 @@
             (map-set gallery-curation { curator: tx-sender, position: (get position featured-info) } {
                 artist: artist,
                 curated-at: stacks-block-height,
-                reason: (unwrap-panic (as-max-len? new-description u150))
+                reason: new-description
             })
             true
         )
@@ -656,14 +656,14 @@
 )
 
 (define-public (rate-artist (artist principal) (rating uint))
-    (begin
-        (asserts! (and (>= rating u0) (<= rating u100)) (err err-invalid-rating))
-        (let ((current-rep (get-artist-reputation artist)))
-            (map-set artist-reputation artist (merge current-rep {
-                community-rating: rating
-            }))
-            (ok true)
-        )
+    (asserts! (and (>= rating u0) (<= rating u100)) (err err-invalid-rating))
+    
+    ;; Update artist reputation with new community rating
+    (let ((current-rep (get-artist-reputation artist)))
+        (map-set artist-reputation artist (merge current-rep {
+            community-rating: rating
+        }))
+        (ok true)
     )
 )
 
