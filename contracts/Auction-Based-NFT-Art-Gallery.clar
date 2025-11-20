@@ -22,6 +22,7 @@
 (define-data-var gallery-owner principal tx-sender)
 (define-data-var featured-artists-count uint u0)
 (define-data-var max-featured-artists uint u10)
+(define-data-var total-watchlist-entries uint u0)
 
 (define-map auctions
     uint 
@@ -106,6 +107,14 @@
         artist: principal,
         curated-at: uint,
         reason: (string-ascii 150)
+    }
+)
+
+(define-map user-watchlist
+    { user: principal, auction-id: uint }
+    {
+        added-at: uint,
+        highest-bid-at-add: uint
     }
 )
 
@@ -680,6 +689,50 @@
     (begin
         (asserts! (is-eq tx-sender (var-get gallery-owner)) (err err-not-gallery-owner))
         (var-set gallery-owner new-owner)
+        (ok true)
+    )
+)
+
+(define-read-only (is-in-watchlist (user principal) (auction-id uint))
+    (is-some (map-get? user-watchlist { user: user, auction-id: auction-id }))
+)
+
+(define-read-only (get-watchlist-entry (user principal) (auction-id uint))
+    (map-get? user-watchlist { user: user, auction-id: auction-id })
+)
+
+(define-read-only (get-total-watchlist-entries)
+    (var-get total-watchlist-entries)
+)
+
+(define-public (add-to-watchlist (auction-id uint))
+    (let (
+        (auction (unwrap! (map-get? auctions auction-id) (err u60)))
+        (current-highest-bid (get highest-bid auction))
+        (entry-exists (is-some (map-get? user-watchlist { user: tx-sender, auction-id: auction-id })))
+    )
+        (asserts! (is-eq (get status auction) "active") (err u61))
+        (asserts! (not entry-exists) (err u62))
+        (map-set user-watchlist { user: tx-sender, auction-id: auction-id } {
+            added-at: stacks-block-height,
+            highest-bid-at-add: current-highest-bid
+        })
+        (var-set total-watchlist-entries (+ (var-get total-watchlist-entries) u1))
+        (ok true)
+    )
+)
+
+(define-public (remove-from-watchlist (auction-id uint))
+    (let ((entry (unwrap! (map-get? user-watchlist { user: tx-sender, auction-id: auction-id }) (err u63))))
+        (map-delete user-watchlist { user: tx-sender, auction-id: auction-id })
+        (var-set total-watchlist-entries (- (var-get total-watchlist-entries) u1))
+        (ok true)
+    )
+)
+
+(define-public (clear-watchlist-for-auction (auction-id uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get gallery-owner)) (err err-not-gallery-owner))
         (ok true)
     )
 )
